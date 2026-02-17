@@ -1,7 +1,7 @@
 ---
 name: minimax-usage
 description: Check MiniMax coding plan usage/credits remaining. Requires MINIMAX_API_KEY environment variable.
-metadata: {"openclaw":{"emoji":"💳","requires":{"bins":["curl"]}}}
+metadata: {"openclaw":{"emoji":"💳","requires":{"bins":["curl","jq"],"env":["MINIMAX_API_KEY"]}}}
 ---
 
 # MiniMax Usage

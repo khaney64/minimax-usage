@@ -22,6 +22,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Validate threshold is a non-negative integer if provided
+if [[ -n "$THRESHOLD" ]] && ! [[ "$THRESHOLD" =~ ^[0-9]+$ ]]; then
+  echo "Error: --threshold must be a non-negative integer" >&2
+  exit 1
+fi
+
 if [[ -z "$API_KEY" ]]; then
   echo "Error: MINIMAX_API_KEY environment variable not set" >&2
   exit 1
@@ -36,52 +42,68 @@ if [[ $? -ne 0 ]] || [[ -z "$response" ]]; then
   exit 1
 fi
 
-if [[ "$response" == *"error"* ]] || [[ "$response" == *"Error"* ]]; then
-  echo "API Error: $response" >&2
+# Check for API-level error using JSON field
+api_error=$(echo "$response" | jq -r '.error // empty')
+if [[ -n "$api_error" ]]; then
+  echo "API Error: $api_error" >&2
   exit 1
 fi
 
-echo "$response" | python3 -c "
-import sys
-import json
-from datetime import datetime, timezone, timedelta
+# Extract fields from first model entry
+model_count=$(echo "$response" | jq '.model_remains | length')
+if [[ "$model_count" -eq 0 ]] || [[ "$model_count" == "null" ]]; then
+  echo "Error: No model data in API response" >&2
+  exit 1
+fi
 
-data = json.load(sys.stdin)
-et = timezone(timedelta(hours=-5))
-threshold = ${THRESHOLD:-0}
-has_threshold = bool('${THRESHOLD}')
+total=$(echo "$response" | jq '.model_remains[0].current_interval_total_count // 0')
+remaining=$(echo "$response" | jq '.model_remains[0].current_interval_usage_count // 0')
+model=$(echo "$response" | jq -r '.model_remains[0].model_name // "MiniMax"')
+end_time=$(echo "$response" | jq '.model_remains[0].end_time // empty')
+remains_time=$(echo "$response" | jq '.model_remains[0].remains_time // empty')
 
-if 'model_remains' in data and len(data['model_remains']) > 0:
-    mr = data['model_remains'][0]
-    total = mr.get('current_interval_total_count', 0)
-    remaining = mr.get('current_interval_usage_count', 0)  # API returns remaining, not used
-    used = total - remaining
-    model = mr.get('model_name', 'MiniMax')
+# Calculate remaining percentage
+if [[ "$total" -gt 0 ]]; then
+  # Use awk for floating point
+  remaining_pct=$(awk "BEGIN { printf \"%.1f\", ($remaining / $total) * 100 }")
+  remaining_pct_int=$(awk "BEGIN { printf \"%d\", ($remaining / $total) * 100 }")
+else
+  remaining_pct="0.0"
+  remaining_pct_int=0
+fi
 
-    remaining_pct = (remaining / total * 100) if total > 0 else 0
+# If threshold set and we're above it, exit silently
+if [[ -n "$THRESHOLD" ]] && [[ "$remaining_pct_int" -ge "$THRESHOLD" ]]; then
+  exit 0
+fi
 
-    # If threshold set and we're above it, exit silently
-    if has_threshold and remaining_pct >= threshold:
-        sys.exit(0)
+# Build output
+if [[ -n "$THRESHOLD" ]] && [[ "$remaining_pct_int" -lt "$THRESHOLD" ]]; then
+  echo "**⚠️ MiniMax Usage Alert — ${model}**"
+else
+  echo "**🤖 MiniMax Usage — ${model}**"
+fi
 
-    lines = []
-    if has_threshold and remaining_pct < threshold:
-        lines.append(f'**⚠️ MiniMax Usage Alert — {model}**')
-        lines.append(f'Remaining: **{remaining:,}** of {total:,} requests ({remaining_pct:.1f}%)')
-    else:
-        lines.append(f'**🤖 MiniMax Usage — {model}**')
-        lines.append(f'Remaining: **{remaining:,}** of {total:,} requests ({remaining_pct:.1f}%)')
+remaining_fmt=$(printf "%'d" "$remaining")
+total_fmt=$(printf "%'d" "$total")
+echo "Remaining: **${remaining_fmt}** of ${total_fmt} requests (${remaining_pct}%)"
 
-    if 'end_time' in mr:
-        end_dt = datetime.fromtimestamp(mr['end_time'] / 1000, tz=et)
-        lines.append(f'Resets: {end_dt.strftime(\"%b %d, %Y %I:%M %p\")} ET')
+# Reset time (end_time is in milliseconds)
+if [[ -n "$end_time" ]]; then
+  end_secs=$((end_time / 1000))
+  # Format in Eastern Time
+  reset_str=$(TZ="America/New_York" date -r "$end_secs" "+%b %d, %Y %I:%M %p" 2>/dev/null \
+    || TZ="America/New_York" date -d "@$end_secs" "+%b %d, %Y %I:%M %p" 2>/dev/null)
+  if [[ -n "$reset_str" ]]; then
+    echo "Resets: ${reset_str} ET"
+  fi
+fi
 
-    if 'remains_time' in mr:
-        secs = int(mr['remains_time'] / 1000)
-        h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
-        lines.append(f'Time left: {h}:{m:02d}:{s:02d}')
-
-    print('\n'.join(lines))
-else:
-    print(json.dumps(data, indent=2))
-"
+# Time remaining (remains_time is in milliseconds)
+if [[ -n "$remains_time" ]]; then
+  secs=$((remains_time / 1000))
+  h=$((secs / 3600))
+  m=$(( (secs % 3600) / 60 ))
+  s=$((secs % 60))
+  printf "Time left: %d:%02d:%02d\n" "$h" "$m" "$s"
+fi
