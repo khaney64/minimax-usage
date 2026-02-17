@@ -12,10 +12,10 @@ Check your MiniMax coding plan credits remaining.
 
 ```bash
 # Check remaining credits
-minimax-usage
+minimax-usage.sh
 
 # Only alert when remaining drops below 20%
-minimax-usage --threshold 20
+minimax-usage.sh --threshold 20
 ```
 
 ## Options
@@ -52,7 +52,7 @@ The `--threshold` flag makes this ideal for a cron job that runs periodically an
 ```bash
 # Check every 30 minutes, alert if below 20%
 # Requires MINIMAX_API_KEY to be set in the cron environment
-*/30 * * * * minimax-usage --threshold 20 | discord-webhook
+*/30 * * * * minimax-usage.sh --threshold 20 | discord-webhook
 ```
 
 No output is produced when usage is above the threshold, so downstream commands (e.g. a webhook) are only triggered when credits are running low.
